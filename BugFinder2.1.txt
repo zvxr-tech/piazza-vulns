@@ -1,0 +1,750 @@
++===========================+
+| Date: 04/04/13            |
+| Assignment: Bug Finder #2 |
+| Course: CPSC 525          |
+| Semester: W13             |
+| Author: Mike Clark        |
+| UCID: XXXXXX              |
++===========================+
+
+ADDENDUM
+========
+Post-submission, an additional vulnerability was
+discovered allowing for users to view private
+messages between other students and instructors.
+This is detailed in the accompanying slide deck.
+
+
+addendum
+************************************************
+++++++++++++++++++++++++++++++++++++++++++++++++
+||||||||||||<<<<<HACKING PIAZZA>>>>>||||||||||||
+++++++++++++++++++++++++++++++++++++++++++++++++
+************************************************
+
+If that switch is on, I'm turning it off. 
+If that switch is off, then I'm turning it on. 
+And by-golly, if there's a red button, 
+I'm pushing it twice.
+
+-Jayson E. Street
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+
+============
+  SUMMARY
+============
+
+Piazza (Piazzza) is a Q&A web service. It can be described as "mixture between a
+wiki and a forum" that can be used with learning management systems. 
+
+This document will provide a black-box analysis of the Piazza web service and 
+present vulnerabilities that have been discovered. It will also examine ways to 
+exploit these vulnerabilities and possible methods to mitigate them.  It will 
+conclude by discussing interactions with the vendor and further investigations 
+that could be conducted.
+
+The primary vulnerabilities (and associated exploitations, and mitigations) 
+I will be discussing are as follows:
+
++ Replay attacks using session-keys.
++ Creating smurf Piazza accounts using the same gmail account.
++ Merging users into a class without the instructors consent.
++ Using the same merging technique to attack the integrity of Piazza content.
++ Possibly merging Piazza accounts ex parte.
++ Obtaining user information without proper authorization to do so
++ Obtaining leaked FB account information
+
+
+============
+ANNOTATIONS
+============
+
++ When refering to evidence that accompanies this document it will be of the 
+format "EVIDENCE: ./local_path_to_file/file_name".
+
++ When refering to a piece of source code that I have obtained a copy of and 
+stored locally it will be of the format "SRC: ./local_path_to_file/file_name".
+
++ When refering to evidence stored externally (such as a source file on a remote 
+server) it will be of the format "EXT_SRC: *******".
+
++ When refering to raw HTTP transaction logs it will be of the format 
+"HTTP Request and Response: ./local_path_to_file/file_name.http"
+
+
+============
+   TOOLS
+============
+
+OFF-THE-SHELF
+------------
+
+NAME (version): Microsoft Windows 7 x64 SP1 (v.6.1.7601)
+DESCRIPTION: The operating system used to run the majority of the software tools
+listed below.
+URL: http://www.microsoft.com
+--
+
+NAME (version): Oracle VM Virtual Box Manager (v.4.2.10 r84104)
+DESCRIPTION: A virtualization software package developed by Sun Microsystems. 
+Distributed under either the GNU GPL or a proprietary license with additional 
+features.
+URL: https://www.virtualbox.org
+--
+
+NAME (version): Kali Linux (kali-linux-1.0.1-amd64)
+DESCRIPTION: A distribution based on the Debian GNU/Linux distribution aimed at 
+digital forensics and penetration testing use.
+URL: http://www.kali.org
+--
+
+NAME (version): Google Chrome Web Browser (v.26.0.1410.43 m)
+DESCRIPTION: A freeware web browser developed by Google that uses the WebKit 
+layout engine.
+URL: http://www.google.com/chrome
+--
+
+NAME (version): Chrome Developers Tools (v.26.0.1410.43 m)
+DESCRIPTION: Provide web developers deep access into the internals of the 
+browser and their web application.
+URL: http://www.google.com/chrome
+--
+
+NAME (version): Mozilla Firefox Web Browser (19.02-RELEASE)
+DESCRIPTION: A free and open source web browser that uses the Gecko layout 
+engine to render web pages.
+URL: http://www.mozilla.org/en-US/
+--
+
+NAME (version): Firebug (v.1.11.2)
+DESCRIPTION: Swiss-Army-Knife Web Development Tool
+URL: https://www.getfirebug.com/
+--
+
+NAME (version): Tamper Data (v.11.0.1)
+DESCRIPTION: A tool to view and modify HTTP/HTTPS headers and post parameters.
+URL: https://addons.mozilla.org/en-us/firefox/addon/tamper-data/
+--
+
+NAME (version): HttpRequester (v.1.0.4)
+DESCRIPTION: A tool for easily making HTTP requests (GET/PUT/POST/DELETE), 
+viewing the responses, and keeping a history of transactions.
+URL: https://addons.mozilla.org/en-us/firefox/addon/httprequester/
+--
+
+NAME (version): Notepad++ (v.5.9.8-UNICODE)
+DESCRIPTION: A free source code editor which supports several programming 
+languages running under the MS Windows environment.
+URL: http://notepad-plus-plus.org/
+--
+
+NAME (version): puTTY (v.0.62)
+DESCRIPTION: A free implementation of Telnet and SSH for Windows and Unix 
+platforms, along with an xterm terminal emulator. 
+URL: http://www.chiark.greenend.org.uk/~sgtatham/putty/
+
+
+Tailor-Made
+------------
+
+Besides basic BASH scripts used for file processing and parsing information I 
+created three scripts to assist me in my analysis:
+
+NAME: GenDateHash
+DESCRIPTION: This program will generate a set of hash codes from a start date 
+(UNIX timestamp) to an end date. This assisted me in verifying the assertions 
+made while attempting to reverse-engineer the hash codes used throughout Piazza.
+FILE: ./src/GenDateHash.java
+--
+
+NAME: Code36
+DESCRIPTION: This program will encode and decode between base 10 and base 36 
+encodings. This also assisted me in verifying the assertions made while 
+attempting to reverse-engineer the hash codes used throughout Piazza.
+FILE: ./src/Code36.java
+--
+
+NAME: GenEmailPerm
+DESCRIPTION: This program will generate every permutation of a name string 
+punctuated with periods, and then append each to '@HOSTNAME'. This also assisted
+me in generating a large set of 'smurf' email accounts based on a pre-existing,
+legitimate gmail account.
+FILE: ./src/GenEmailPerm.java
+
+
+============
+ PROTOCOLS
+============
+
+HTTP(s) was the primary network protocol used to interact with the web service. 
+This was conducted over TCP/IP from a remote client located in Calgary, Alberta,
+Canada over the course of late Winter and early Spring 2013.
+
+
+============
+  TIMELINE
+============
+
+0) Always index from zero.
+
+1) I intially began reconnaissance in an attempt to expose vulnerabilities 
+that would allow an adversary to perform unauthorized actions such as, executing
+unauthorized actions on behalf of another user.  In general, I was looking at 
+ways in which an attacker could abuse their level of authorization.
+
+2) I began enumerating and analyzing the parameters (data) being offered to the 
+server (eg. user/content/network IDs).  This analysis led to an investigation 
+into how the data were being generated on the client-side (static and dynamic
+javascript code and network traffic analysis) in an attempt to gain insight into
+the context of that data.
+
+3) Manual code inspection and observation of network traffic allowed me to map 
+the Web API for Piazza. I was then able to begin communicating directly with
+the web service (HTTP requests), circumventing client-side validation and 
+allowing for further analysis to be carried out more efficiently.
+
+4) I soon discovered that there was also (unsurprisingly) server-side validation
+that I was unable to find vulnerabilities in (not that there is none there). 
+However, earlier while inspecting the javascript, I noticed an object in the DOM
+labeled 'PA' which had two children of interest: PA->user and PA->users. 
+
+5) I began documenting and analyzing these two structures further which 
+contained a local cache of information regarding the current user and all other 
+users 'known' to that current user, respectively.
+
+6) I then committed to a full examination of the API, using HTTP packet forging 
+tools to submit my own requests and discover vulnerabilities.  
+
+7) The timeline, from this point onward, is covererd in great detaile for the 
+reaminder of this document.
+
+============
+RECONNAISSANCE
+============
+
+PHYSICAL LOCATION
+------------
+One of the IP addresses that Piazza.com resolved to revealed that (at the time) 
+the service was being hosted on an AWS EC2 server, 
+DNS: 'ec2-54-243-185-105.compute-1.amazonaws.com', located in Northeastern 
+United States. (EVIDENCE: ./img/piazza_dns.png;./img/ piazza_cloud_network.png)
+This was corroborated by: 
+	http://myip.ms/info/whois/54.243.103.77/k/1238725296/website/piazza.com
+
+WEB SERVER
+------------
+By inspection of the response headers I was able to determine some of the 
+software running on the web server hosting Piazza.
+	Server: nginx/1.2.1.16
+	X-Powered-By: Phusion Passenger (mod_rails/mod_rack) 3.0.7
+
+Corroborating evidence, to the above, was found at:
+	http://SiteInfoTool.com/piazza.com
+
+API SERVER
+------------
+Similarly, by submitting an invalid GET request to the API the server yielded an
+error page (EVIDENCE: ./img/jetty_500 ; ./img/jetty_502.png ) indicating the 
+back-end software powering the web service.
+--
+NAME: Jetty (v.???)
+DESCRIPTION: Jetty provides an Web server and javax.servlet container, plus 
+support for SPDY, Web Sockets, OSGi, JMX, JNDI, JASPI, AJP and many other 
+integrations. These components are open source and available for commercial use 
+and distribution.
+URL:http://www.eclipse.org/jetty/
+--
+
+Interestingly, a different server version is returned when making requests to
+https://piazza.com/logic/, perhaps indicating a different server for the API.
+
+Server: nginx/1.2.1.1345
+(EVIDENCE: ./img/web_server-api.png)
+
+
+ARCHITECTURE
+------------
+
+The primary client-side business logic is contained within the following script 
+file: dashboardXXXX.js , hosted on a cloudfront server. The XXXX has been 
+observed to increment over the course of my investigation; from 5223 to 5237 
+over an, approximatley, two week period.
+
+The server-side logic is handled by a REST API that responds to GET and POST 
+requests made to it.  The requests are made with a session key (stored in a
+cookie) that is submitted with each request. Limitations are also imposed on the
+user based upon this session key, and not simply providing a 'valid' uid that 
+has the required  permissions.
+
+This analysis will be primarly concerned with the server-side API, as the 
+javascript that enables client-side validation is trivial to circumvent.
+
+
+FUNCTIONALITY
+------------
+The following is a list and description of the functionality that is realized by
+Piazza web service.  In no way is this list complete, but has been compiled to 
+aid the reader in understanding the vulnerabilities and exploits described in 
+the later sections.
+
+
+REGISTRATION
+Piazza allows registration of three classes of users: Students, TAs, and 
+Professors. Students can register with a valid school email address
+(eg. ____@ucalgary.ca) without enroling in a class, and can create classes with 
+the option to later invite a Professor/TA to join that class. Students can also 
+receive an invitation from a Professor that has already created a class and 
+register with a non-school email account, if that was what the Professor used
+when creating the invitation/enrolment offer. 
+Professors and TAs can register in a a similar manner as a student, however, 
+they are afforded elevated privileges, as discussed in the vulnerabilities 
+section.
+--
+
+MERGING USER ACCOUNTS
+Piazza allows users to 'merge' two accounts.  This is done by providing an email
+address associated with an existing account [ALICE] when registering a second 
+'new' account [BOB](or alternatively, from the account settings page of the 
+second account after it has been registered).  An email is then to the email 
+associated with ALICE informing her that BOB wishes to merge with ALICE and
+containing a link to complete this. The link is of the form, 
+https://piazza.com/verify_email/BOB_UID/NONCE?preferred=yes. This link directs 
+to a page where the user is presented with the option of accepting the merge, 
+rejecting the merge, or informing Piazza that the merge was not requested.
+
+Upon merging BOB with ALICE, BOBs account will now overshadow ALICE and any 
+attempt to log-in using either credential will result in BOBs account being 
+signed in. (EVIDENCE: ./img/missing_profile.png)
+
+There are more details related to merging which are discussed in the 
+vulnerabilities section, after an explanation of data types and structures used
+in Piazza.
+
+For future reference, the following HTTP logs contain records of the API calls
+used to exercise this functionality.
+
+Sending the request
+HTTP Request and Response: ./data/API_user.update.http
+
+Merge Request
+HTTP Request and Response: ./data/API_invite_pending.http
+
+Merge Accept
+HTTP Request and Response: ./data/API_invite_accept.http
+--
+
+CONNECTING WTIH FACEBOOK
+Piazza offers users the ability to "Connect" with their Facebook accounts. This 
+enables users to authenticate to Piazza with their Facebook credentials.
+--
+
+LOGGING IN
+To login to Piazza the user must provide an email address associated with their 
+account, as well as the password corresponding to their Piazza account. This is
+done through a, fairly standard, html web interface.
+
+For future reference, the following HTTP logs contain records of the API calls
+used to exercise this functionality.
+
+HTTP Request and Response: ./data/API_login.http
+--
+
+CREATING COURSES
+Courses may be created by both students and professors.  However, only accounts 
+associated with a valid school email addresss (as determined by Piazza) can 
+fill the role of Professor/TA when initially creating a course. However, 
+additional Professors/TAs with non-school-associated emails can be added by a 
+Professor whose email address is from a valid school account.
+
+For future reference, the following HTTP logs contain records of the API calls
+used to exercise this functionality.
+
+HTTP Request and Response:  ./data/API_network.create.http
+--
+
+ENROLING IN COURSES
+Piazza offers two ways for enrolment in a particular class: self-enrolment by
+the student or enrolment by the professor. We will be primarly concerned with 
+the process whereby a professor enrols a student in a class in which their role 
+is a 'Professor'. To enrol a student(s) the Professor simply provides an email
+(or delimited list) through a web interface or has the option of uploading a 
+file containing the list of students they wish to enrol. (It should be noted 
+that student emails are not required to be associated with a school account).
+Following this enrolment, invitations are then sent out via email, however, at 
+this point a user id and 'empty' account has been created on their behalf by 
+Piazza.
+
+
+For future reference, the following HTTP logs contain records of the API calls
+used to exercise this functionality.
+
+HTTP Request and Response:  ./data/API_network.set_config.http
+HTTP Request and Response:  ./data/API_network.update.http
+HTTP Request and Response:  ./data/API_network.update.http							
+
+--
+CREATING CONTENT
+Content can be created by both students and professors/TAs.  Content can be made
+either public, anonymous to everyone but the professor/TA, or anonymous to 
+everyone in the class (including the professor/TA). Content can only be
+created in the network to which the user belongs. Attempts to do otherwise 
+result in an error.
+
+For future reference, the following HTTP logs contain records of the API calls
+used to exercise this functionality.
+
+HTTP Request and Response: ./data/API_content.create.http
+
+--
+VIEWING CONTENT
+Similar to content creation, viewing content is restricted to networks to which
+a particular user belongs. Attempts to do otherwise result in an error.
+
+For future reference, the following HTTP logs contain records of the API calls
+used to exercise this functionality.
+
+HTTP Request and Response: ./data/API_content.get.http
+
+--
+VIEWING USERS
+Other user profiles can be viewed once they have posted non-anonymous content.
+By way of the GUI, this is through a hperlink embedded in their content posting.
+
+For future reference, the following HTTP logs contain records of the API calls
+used to exercise this functionality.
+
+HTTP Request and Response: ./data/API_network.get_all_users.http
+HTTP Request and Response: ./data/API_network.get_user-no_nid.http
+--
+
+DATA STRUCTURES
+------------
+The following structures are the two most critical structures used in my 
+analysis. Each is cached locally in the browser DOM of the active user which is 
+updated periodically, as described in the API section above.
+
+
+The 'User' structure stores information about the currently logged-in user.
+
+	PA->User
+			activated: 1365230095359
+			can_admin: Object
+			can_anonymize: false
+			config: Object
+			email: "DEADBEEF@gmail.com"
+			emails: Array[1]
+			facebook: Object
+			facebook_id: undefined
+			feed_prefetch: Object
+			id: "hf5cy3lp15o3ad"
+			is_admin: false
+			is_public: false
+			last_content: Object
+			last_network: "hf4zsf2w7jv5ri"
+			name: "Dumme Daves Brother"
+			networks: Array[1]
+			new_questions: Object
+			photo: ""
+			photo_original: ""
+			profile: Object
+			sid: "aXef[j=QBHi,S4"
+
+The 'Users' structure is an array (indexed by uid) containing information about 
+other users 'known' to the current user. That is, users whose posts/profiles 
+have been viewed by the current user (whenever an API_get_userinfo or
+API_get_users AJAX call is made on the current users behalf requesting the 
+information). THe one exception is that Professors and TAs will 'know' of ever 
+user enroled in *any* of the networks for which they possess that role.
+
+	PA->Users[uid]
+			hf4zt6r3xof536: Object
+			admin: true
+			admin_permission: 15
+			email: "other_user@email.com"	  << Only visible to Professors/TAs
+			facebook_id: DEADBEEF
+			id: "DEADBEEF"
+			name: "Other User"
+			photo: null
+			role: "Professor"
+			us: false
+	
+	
+DATA TYPES
+------------
+
+NONCE? [aid]
+This is a unique (base 36) value that is generated for each request made to 
+Piazza's REST API. 
+It is generated as follows:
+	aid = (new Date()).getTime().toString(36) + \
+			Math.round(Math.random() * 1679616).toString(36);
+(EXT_SRC=https://dvngeac8rg9mb.cloudfront.net/cache/dashboardXXXX.js)
+
+--
+NETWORK ID [nid]
+This is a unique identifier (base 36) for a given class (eg. CPSC 525). 
+Experimentation strongly indicates that this is generated in a manner similar to
+'aid'.
+
+--
+USER ID [uid]
+A unique identifier (base 36) for a particular user. An experiment was 
+conducted where 2048 new users were created by simultaneously enrolling them 
+(by a Professor) in a network. The first 8 base36 characters incremented in 
+accordance with a base36 encoding of the UNIX timestamp. Similarly, the last 6 
+characters (base36 as well) incremented by 1, with each user. The evidence 
+*overwhelmingly* indicates that 'uid' is generated in the following manner: 
+
+	aid = (new Date()).getTime().toString(36) + \
+			next_available_sequence_number;
+
+Where the next available sequence number is in the range [0, 36^6).
+(EVIDENCE: ./data/uid_reverse.log)
+
+--
+CONTENT ID [cid]
+This is a unique identifier (base 36) for the root thread posting made to the 
+class discussion board. Experimentation strongly indicates that this is 
+generated in a manner similar to 'aid'.
+
+--
+ID [id]
+This parameter name appears in various API requests. It represents one of the 
+above IDs depending on the context of the request. For example, 'id' represents
+'nid' when making a API_network.update request.
+
+
+============
+VULNERABILITIES & EXPLOITATION
+============
+
+0. COOKIES AND SESSION KEYS
+------------
+I observed some interesting behavior regarding session keys associated with 
+Piazza (stored within the site's cookie).  It appeared I could carry out a 
+successful replay attack, using an old (yet valid) session-key. This was 
+accomplished wihtin HttpRequester.  After logging-off from Piazza (within the 
+Firefox web browser), I would replay an 'old' POST-request from within 
+HttpRequester and it would complete successfully (EVIDENCE: 
+using_old_cookies.png). Upon refreshing piazza.com within Firefox it would 
+authenticate and circumvent the login screen (**even though before re-submitting
+ the POST, an attempt to piazza.com would force me to the login, and the DOM 
+ cache showed me as being logged off**).  This replay from within HttpRequester 
+ was also successful even when Firefox was terminated.  
+Upon futher investigation, it was discovered that HttpRequester was existing 
+within the context of the original Firefox process, causing me to believe that 
+somehow the session was still active for HttpRequester (Keep-Alive is set) but 
+not being shared with Firefox.  Still, after logging-off of Piazza from within 
+Firefox and a full shutdown of both Firefox AND HttpRequester, I am still able 
+to successfully replay the 'old' POST-request from HttpRequester after 
+restarting it. However, I could not duplicate this within 
+firefox alone nor a RAW puTTY terminal session; further studies should be 
+conducted regarding this obeserved behaviour.
+--
+
+1. ENTROPY OF HASH CODES
+------------
+The manner in which the hash codes are generated does not provide as much 
+entropy as one would think.  This is because the hash codes are generated by 
+concatenating the base36 encoding of the current date with a random nonce. 
+In many cases an adversary may have a good idea of the time period for the 
+hash code they would like to predict, thus eliminating a large set of possible 
+states. The nonce still provides a level of security, but only an
+additional factor of 2^31. 
+--
+
+2. MERGING USER ACCOUNTS
+------------
+
+As discussed earlier (BOB merging with ALICE), Piazza offers the ability for 
+users to merge two accounts. The following details regarding the merge and how 
+it affects the user accounts:
+
+> ALICEs email is added to a list of emails associated with BOBs account 
+(uid)
+       
+> ALICE and BOBs networks are merged, BOB inherits any admin privileges that 
+ALICE has for her networks.
+
+> This merge is not pushed to online Piazza users, but is only updated when the 
+client browser makes an API call requesting a users status to be updated.
+
+
+A vulnerability exists where, when two accounts are merged, the networks are 
+inherited across both.  This allows for entry into networks where access would
+otherwise be restricted. To exploit it a malicious user can merge account B 
+(not enroled in a particular course) with an account A already enroled in a 
+course, this would allow the account B access to a course and any others 
+associated with account A.
+
+Furthermore, the integrity of the content (such as class polls) can now be 
+compromised, since the merged account will have a 'new' uid and thus, Piazza
+will believe that user has not engaged in the same actions as the first account.
+
+Finally, it should be noted that merging accounts does not require 
+authentication by the recipient of the email regarding the merge. 
+When a merge is requested, an email is sent to the account which is the target 
+of the merge.  This email contains a link composed of the uid of the requester 
+and a hash code (generated using the current date and nonce). In this case the 
+adversary will, not only know their own uid, but have access to the timestamp 
+within tens of seconds or less. I was able to narrow (by conducting experiments)
+the timestamp encoding of the hash code to ~2000 states, by using the timestamp 
+found in the server response header.
+
+That leaves the nonce, which is in O(2^32) possible states.  Combining that with
+the small number of states I could restrict the timestamp to, this left me with 
+O(2^43) possible states. This would not be practical to 'bute-force' the URL in
+a short period of time, but if one were to carry out the attack (perhaps during 
+the summer months, or in combination with other attacks...)
+
+3. SMURF ACCOUNTS
+------------
+
+It was discovered that a vulnerability exists in the difference by which Google
+gmail and Piazza interpret email addresses.  Simply put, gmail ignores periods 
+that are interleaved in the email address name. For example, Gmail will deliver 
+emails addressed to mike@gmail.com and m.ike@gmail.com to the same inbox.  
+On the other hand, Piazza considers them unique email addresses.  This can be 
+exploited to allow an adversary to generate a large number of smurf accounts 
+(EVIDENCE: ./data/large_email_perm.txt) while having to only obtain one smurf 
+email account.
+
+
+
+4. NETWORK CREATION
+------------
+When a user is creating a course the last step in the process is to verify a 
+valid school email address.  However, a vulnerability exists in that the course 
+is actually created within Piazza before this verification is completed.  
+Although creating courses with no students does not seem very interesting, one 
+could imagine an attack where a denial-of-service is carried out by overloading 
+the system with bogus course request, and then not verifying the account.  This
+could also be done to consume resources at the expense of Piazza (since, as 
+discussed in the Recon section) they use Amazon EC2.
+
+
+5. USER INFORMATION
+------------
+As discussed earlier, Piazza caches user information of 'known' users. However, 
+a vulnerability exists that allows users to 'know' about other arbitrary users 
+without being enroled in the same class.  This can be exploited by making an API
+call to get_user ((EVIDENCE: API_network.get_user-no_nid.http) and providing the
+uid of the target.  This is compounded by the fact that you do not need to even 
+provide a network id (nid) and that ou can also provide an array of uid's to 
+check.  Furthermore, even if you provide it with a mix of valid and invalid 
+uid's, the API will still return the valid uids.  This is significant, in that 
+an attacker could enumerate EVERY user on the system (if he/she were patient 
+enough).  Fortunately, an attacker may only want the Piazza user information on 
+their fellow classmates. In this case the attacker could take the nid of the 
+class, decode the first 8 chars to obtain the UNIX timestamp, and then use that 
+as a baseline to begin a brute force attack on the API rquesting information on 
+uids generated from that timestamp onward for (perhaps a month) to collect all 
+the Piazza user info for every classmate registered.   The one downside, is that 
+the information contained is fairly mundane, except when the student chose to 
+use Facebook connect, as discussed in the following section.
+
+
+6. FACEBOOK
+------------
+
+There are two vulnerabilities found with the way Facebook is integrated with 
+Piazza.  
+
+The most important is that the Facebook ID is visible within the DOM
+PA->users[uid] structure, meaning, that if you are 'known to another user 
+(as described earlier) your facebook id can be obtained.  Recall, that one only 
+need view a post you have made, or a comment ou have made to then be able to 
+find you on facebook (and perhaps even more frightening is that 
+Students/Profs/TAs are automatically known to each other).  
+
+Piazza explicitely states that by using connect, only your profile picture and 
+facebook name will be used.  It is most likely not intentional, but when someone
+uses FB connect, I do not believe (in good faith), an average user would expect 
+this sort of disclosure to occur.  That is, the ability for someone to link 
+a given Piazza user (using FB Connect) with their facebook id, and thus their profile.
+
+A second problem with the Facebook connect functionality is that when a user 
+removes the application from the facebook side, it does not remove the facebook
+id from their Piazza account. This would not be expected and may put false 
+confidence when a user wants to 'cut their facebook ties' with Piazza.
+
+
+============
+MITIGATIONS
+============
+
+0. Could not verify, so I will not comment on posssible mitigation techniques.
+
+1. The entropy could be partially restored in a few ways.  First, entropy could 
+reintroduced by having a random page load (or some other variable time event) 
+occur before the timestamp is collected.  This would make it harder for the 
+adversary to narrow down the timestamp, while at the same time provide the same
+functionality of the timestamp (ever increasing 'psuedo-random' counter).  
+The second, and more obvious, solution would be to increase the size of the 
+nonce beyond 2^32. Although, there may be practical reasons for why this is,
+restricted (eg. doubling it would add an extra 4 bytes to almost EVERY request
+to the server).
+
+2. The logic behind merging two accounts and having the networks each is a part 
+of merge as well, makes sense.  However, the merger should inherit the 
+list of what has been viewed/voted on/commented on by the first.  This 
+would eliminate double voting.  The merge-ex-parte vulnerability could be 
+eliminated with an improved hash code (similar to the strong one used for 
+registrartion invitations) or, better yet, requiring the user of the target 
+account recieving the merge request, to authenticate (login), beforehand.
+
+3. This would be a very difficult mittigation, since Piazza would like to accept
+email addresses from many different domains, and each domain will have its only 
+particular way of interpreting the username.  One solution would be for Piazza 
+to maintain a list of how each mail service interprets the usernames, and act 
+accordingly. However, this is most likely infeasable in practice.
+
+4. Again, there is most likely underlying reasons why a course is created before
+enrolment. Such as creating an empty course by a student (as discussed in the 
+section on course creation). However, the resource consumption could be 
+eliminated by placing a timer on how long a course in this state remains active,
+before being automatically removed and its resources reclaimed.
+
+5. This vulnerability could be avoided by maintaining an internal table for which
+user is visible to which other user (based on content submitted and network ids)
+A very simple example: if someone makes an API reuqest for my user info and I 
+have not submitted content visible to them or am not in their network, then deny
+that request. An easier (less effective) solution would be to at least check 
+the nid of the requester and requestee to determine if the should be visible.
+
+6. Don't cache the facebook id of other users.  Piazza allows for certain user 
+fields to be unavailable in the cache of other users; do the same for the 
+facebook id.  (Or, even better, get off the facebook bandwagon!)
+
+
+============
+VENDOR COMMUNICATION
+============
+
+The vendor was contacted through a "Bug Reporting" feature built-into the Piazza
+web interface. The message was simply informing them that I had discovered some 
+"security" bugs and asked them to contact me directly at my University email 
+address, which I provided them. This feature appears to be more geared toward 
+reporting GUI bugs as opposed to the vulnerabilities I have uncovered.
+I am awaiting their response.
+
+============
+ CONCLUSION
+============
+
+In conclusion, Piazza has multiple vulnerablities that affect all five of the 
+principles of information security. The vulerabilities exposed reinforce the 
+lessons taught in CPSC 525 and illustrate the difficulty in engineering complex
+software free from security defects. 
+End of semester... I am tired.... I just want to get a good nights sleep. 
+
+
+============
+ REFERENCES
+============
+
+The Piazza and tool descriptions are used from the corresponding wikipedia 
+articles; used under Fair Use.
